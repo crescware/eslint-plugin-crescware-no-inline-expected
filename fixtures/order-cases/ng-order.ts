@@ -1,9 +1,16 @@
-// With `requireExpectedBeforeActual` enabled: the expected variable is declared
-// after the value under test, so each assertion is reported.
-const something = {};
-const expected = {};
-expect(something).toEqual(expected);
+// With `requireExpectedFirstInTest` enabled (the default): inside a `test`
+// callback the expected variable must be declared first. A statement that is
+// not used to build `expected` may not sit above it, so each assertion here is
+// reported.
 
-const actual2 = { a: 1 };
-const expected2 = { a: 1 };
-expect(actual2).toStrictEqual(expected2);
+test("an unrelated variable is declared above expected", () => {
+  const something = {};
+  const expected = {};
+  expect(something).toEqual(expected);
+});
+
+test("expected is aliased from the value under test", () => {
+  const actual = { a: 1 };
+  const expected = actual;
+  expect(actual).toStrictEqual(expected);
+});

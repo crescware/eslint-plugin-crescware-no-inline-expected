@@ -13,7 +13,7 @@
   "rules": {
     "crescware-no-inline-expected/no-inline-expected": [
       "error",
-      { "requireExpectedBeforeActual": false }
+      { "requireExpectedFirstInTest": false }
     ]
   }
 }
