@@ -149,12 +149,13 @@ describe("matchers: ['toMatchObject', 'toContainEqual']", () => {
     expect(actual).toEqual(expected);
   });
 
-  test("default matchers no longer fire", () => {
-    const expected: string[] = [];
-    expect(messagesFor(matchersDiagnostics, "ng-object.ts")).toEqual(expected);
-    expect(messagesFor(matchersDiagnostics, "ng-array.ts")).toEqual(expected);
-    expect(messagesFor(matchersDiagnostics, "ng-empty.ts")).toEqual(expected);
-  });
+  test.each(["ng-object.ts", "ng-array.ts", "ng-empty.ts"])(
+    "default-matcher fixture %s is no longer reported",
+    (file) => {
+      const expected: string[] = [];
+      expect(messagesFor(matchersDiagnostics, file)).toEqual(expected);
+    },
+  );
 
   test.each(okFiles)("%s has no diagnostics", (file) => {
     const expected: string[] = [];
@@ -183,9 +184,12 @@ describe("requireExpectedBeforeActual (on by default)", () => {
 });
 
 describe("requireExpectedBeforeActual: false", () => {
-  test("the declaration-order check is disabled", () => {
+  test("the declaration-order check stops reporting", () => {
     const expected: string[] = [];
     expect(messagesFor(orderOffDiagnostics, "ng-order.ts")).toEqual(expected);
+  });
+
+  test("total diagnostics are fully accounted for", () => {
     expect(orderOffDiagnostics.length).toBe(0);
   });
 });
