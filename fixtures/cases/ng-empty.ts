@@ -1,6 +1,4 @@
-// Empty `{}` / `[]` literals are trivial to read inline, so they are allowed by
-// default. With `allowEmptyLiteral: false` they are reported with the standard
-// object / array messages.
+// An empty `{}` / `[]` is still an inline literal, so it is reported as well.
 const actual = {};
 
 expect(actual).toEqual({});

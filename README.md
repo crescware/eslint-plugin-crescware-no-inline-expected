@@ -13,16 +13,30 @@ expect(actual).toEqual({ id: 1, name: "Alice" });
 // NG: an inline array literal as the expected value
 expect(actual).toEqual([1, 2, 3]);
 
+// NG: an empty literal is still an inline literal
+expect(actual).toEqual({});
+expect(actual).toEqual([]);
+
 // OK: the expected value is declared first
 const expected = { id: 1, name: "Alice" };
 expect(actual).toEqual(expected);
 
 // OK: a non-literal argument is out of scope
 expect(actual).toEqual(buildExpected());
+```
 
-// OK: an empty literal is allowed by default -- it is trivial to read inline
-expect(actual).toEqual({});
-expect(actual).toEqual([]);
+By default the rule also enforces declaration order: the expected variable must be declared **before** the variable passed to `expect(...)`.
+
+```ts
+// NG: the expected variable is declared after the value under test
+const something = {};
+const expected = {};
+expect(something).toEqual(expected);
+
+// OK: the expected variable is declared first
+const expected = {};
+const something = {};
+expect(something).toEqual(expected);
 ```
 
 ### Scope
@@ -35,10 +49,10 @@ The rule fires when **all** of the following hold for a call expression:
 
 Notes:
 
-- Object and array literals are treated the same.
+- Object and array literals are treated the same, including empty `{}` / `[]`.
 - Every argument is inspected, so multi-argument matchers (e.g. a configured `toHaveBeenCalledWith`) report each inline literal.
-- An empty literal (`{}` / `[]`, with zero properties / elements) is allowed by default and controlled by `allowEmptyLiteral`. A spread (`{ ...base }` / `[...xs]`) counts as non-empty and stays in scope.
 - The rule applies to JavaScript (`.js` / `.mjs` / `.cjs` / `.jsx`) as well as TypeScript: it targets a runtime assertion call, not any TypeScript-only syntax.
+- The declaration-order check (on by default) only applies when both the expected value and the value under test are plain identifiers that resolve to declared variables. Inline literals, calls, and undeclared names have no declaration to order and are left alone.
 - The rule does not autofix; it reports only.
 
 ### Options
@@ -50,17 +64,17 @@ Notes:
     // The matcher names to check. Replaces the default set, not extends it.
     "matchers": ["toEqual", "toStrictEqual"],
 
-    // true (default): empty `{}` / `[]` literals are not reported.
-    // false: report them with the standard message.
-    "allowEmptyLiteral": true
+    // true (default): the expected variable must be declared before the
+    // variable passed to `expect(...)`. Set to false to disable this check.
+    "requireExpectedBeforeActual": true
   }
 ]
 ```
 
-| Option              | Type       | Default                        | Effect                                                                                                                                                                                                      |
-| ------------------- | ---------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `matchers`          | `string[]` | `["toEqual", "toStrictEqual"]` | The matcher names whose inline-literal arguments are reported. Setting this **replaces** the default set. Add names such as `toMatchObject`, `toContainEqual`, or `toHaveBeenCalledWith` to widen coverage. |
-| `allowEmptyLiteral` | `boolean`  | `true`                         | When `true`, empty `{}` / `[]` literals are not reported. Set to `false` to report them as well.                                                                                                            |
+| Option                        | Type       | Default                        | Effect                                                                                                                                                                                                      |
+| ----------------------------- | ---------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `matchers`                    | `string[]` | `["toEqual", "toStrictEqual"]` | The matcher names whose inline-literal arguments are reported. Setting this **replaces** the default set. Add names such as `toMatchObject`, `toContainEqual`, or `toHaveBeenCalledWith` to widen coverage. |
+| `requireExpectedBeforeActual` | `boolean`  | `true`                         | When `true`, additionally requires the variable passed as the expected value to be declared before the variable passed to `expect(...)`. Set to `false` to disable this check.                              |
 
 ## Usage
 

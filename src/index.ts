@@ -5,12 +5,6 @@ type Node = { type: string };
 
 type Identifier = { type: "Identifier"; name: string };
 
-// Only `length` matters here -- the element/property nodes themselves are never
-// inspected, so their shape is left opaque.
-type ArrayExpression = { type: "ArrayExpression"; elements: unknown[] };
-
-type ObjectExpression = { type: "ObjectExpression"; properties: unknown[] };
-
 // `expr as T` / `expr satisfies T`: in both, `expression` is the wrapped value.
 // A literal can sit under any number of stacked clauses (`{} as unknown as T`,
 // `[1] as const`, `{} satisfies T`), so the wrapper is unwrapped down to the
@@ -35,14 +29,29 @@ type CallExpression = {
 
 type ReportDescriptor = { message: string; node: unknown };
 
+// Minimal view of oxlint's scope analysis, reached through `context.sourceCode`.
+// A name resolves to a `ScopeVariable`, whose first definition node carries the
+// `range` start offset -- the textual position of the declaration, which is all
+// the declaration-order check needs.
+type Ranged = { range: [number, number] };
+
+type Definition = { node: Ranged };
+
+type ScopeVariable = { defs: Definition[] };
+
+type Scope = { set: Map<string, ScopeVariable>; upper: Scope | null };
+
+type SourceCode = { getScope: (node: Node) => Scope };
+
 type RuleOptions = {
   matchers?: string[];
-  allowEmptyLiteral?: boolean;
+  requireExpectedBeforeActual?: boolean;
 };
 
 type RuleContext = {
   filename: string;
   options: RuleOptions[];
+  sourceCode: SourceCode;
   report: (descriptor: ReportDescriptor) => void;
 };
 
@@ -87,26 +96,28 @@ const isExpectCall = (node: Node): boolean => {
 };
 
 // Walk down the receiver chain of a matcher call looking for the `expect(...)`
-// anchor. Covers `expect(x).toEqual(...)` as well as the modifier chains
-// `expect(x).not.toEqual(...)`, `expect(x).resolves.toEqual(...)`, and
-// `expect(x).rejects.not.toEqual(...)`: each modifier is one more
-// MemberExpression / CallExpression layer between the matcher and `expect`. Each
-// step descends to a strictly deeper child, so the walk always terminates.
-const chainRootsAtExpect = (node: Node): boolean => {
+// anchor, returning that call (so its argument -- the value under test -- can be
+// read) or null when there is none. Covers `expect(x).toEqual(...)` as well as
+// the modifier chains `expect(x).not.toEqual(...)`,
+// `expect(x).resolves.toEqual(...)`, and `expect(x).rejects.not.toEqual(...)`:
+// each modifier is one more MemberExpression / CallExpression layer between the
+// matcher and `expect`. Each step descends to a strictly deeper child, so the
+// walk always terminates.
+const findExpectCall = (node: Node): CallExpression | null => {
   let current: Node = node;
   while (
     current.type === "MemberExpression" ||
     current.type === "CallExpression"
   ) {
     if (isExpectCall(current)) {
-      return true;
+      return current as CallExpression;
     }
     current =
       current.type === "MemberExpression"
         ? (current as MemberExpression).object
         : (current as CallExpression).callee;
   }
-  return false;
+  return null;
 };
 
 // The matcher name from `expect(x).<name>(...)`: the property of the call's
@@ -144,20 +155,6 @@ const unwrapTypeWrappers = (node: Node): Node => {
   return current;
 };
 
-// An empty `{}` / `[]` with zero properties / elements. A spread (`{ ...base }`
-// / `[...xs]`) counts as a property / element, so it is *not* empty -- those
-// literals stay in scope. Empty literals are trivial to read inline, so they are
-// allowed by default (see `allowEmptyLiteral`).
-const isEmptyLiteral = (node: Node): boolean => {
-  if (node.type === "ObjectExpression") {
-    return (node as ObjectExpression).properties.length === 0;
-  }
-  if (node.type === "ArrayExpression") {
-    return (node as ArrayExpression).elements.length === 0;
-  }
-  return false;
-};
-
 const objectMessage = (matcher: string): string => {
   return `Inline object literal passed to '${matcher}'. Declare the expected value as a variable first: write 'const expected = { ... }; expect(actual).${matcher}(expected);' instead of passing the literal inline.`;
 };
@@ -166,12 +163,39 @@ const arrayMessage = (matcher: string): string => {
   return `Inline array literal passed to '${matcher}'. Declare the expected value as a variable first: write 'const expected = [ ... ]; expect(actual).${matcher}(expected);' instead of passing the literal inline.`;
 };
 
+// Resolve an in-scope variable by name, walking outward through enclosing
+// scopes. Returns null for an unresolved name (e.g. an undeclared global), in
+// which case the declaration-order check is skipped.
+const findVariable = (scope: Scope, name: string): ScopeVariable | null => {
+  let current: Scope | null = scope;
+  while (current !== null) {
+    const variable = current.set.get(name);
+    if (variable !== undefined) {
+      return variable;
+    }
+    current = current.upper;
+  }
+  return null;
+};
+
+// The start offset of a variable's first declaration, or null when it has no
+// definition node (an implicit / ambient binding). Used to compare the textual
+// order of two declarations.
+const declarationStart = (variable: ScopeVariable): number | null => {
+  const def = variable.defs[0];
+  return def === undefined ? null : def.node.range[0];
+};
+
+const orderMessage = (matcher: string): string => {
+  return `The variable passed as the expected value to '${matcher}' is declared after the variable passed to 'expect(...)'. Declare the expected variable first, so the expected value is introduced before the value under test.`;
+};
+
 const rule = {
   meta: {
     type: "suggestion",
     docs: {
       description:
-        "Disallow passing an inline object or array literal as the expected value to an `expect(...)` matcher; declare it in a `const` variable first. By default the deep-equality matchers `toEqual` and `toStrictEqual` are checked; override the set with the `matchers` option. A literal wrapped in `as` / `satisfies` is still reported because it is still inline. Empty `{}` / `[]` literals are allowed by default because they are trivial to read inline; set `allowEmptyLiteral` to `false` to report them too.",
+        "Disallow passing an inline object or array literal as the expected value to an `expect(...)` matcher; declare it in a `const` variable first. By default the deep-equality matchers `toEqual` and `toStrictEqual` are checked; override the set with the `matchers` option. A literal wrapped in `as` / `satisfies` is still reported because it is still inline, and an empty `{}` / `[]` is reported too. The rule also requires, by default, that the variable passed as the expected value is declared before the variable passed to `expect(...)`; set `requireExpectedBeforeActual` to `false` to turn that off.",
     },
     schema: [
       {
@@ -183,7 +207,7 @@ const rule = {
             minItems: 1,
             uniqueItems: true,
           },
-          allowEmptyLiteral: { type: "boolean" },
+          requireExpectedBeforeActual: { type: "boolean" },
         },
         additionalProperties: false,
       },
@@ -196,9 +220,44 @@ const rule = {
         ? configuredMatchers
         : DEFAULT_MATCHERS,
     );
-    // Default true: an empty literal is skipped. Only an explicit `false` opts
-    // into reporting empty `{}` / `[]`.
-    const allowEmptyLiteral = context.options[0]?.allowEmptyLiteral !== false;
+    // Default true: the declaration-order check is on; set
+    // `requireExpectedBeforeActual: false` to disable it.
+    const requireExpectedBeforeActual =
+      context.options[0]?.requireExpectedBeforeActual !== false;
+
+    // Enforce that the variable used as the expected value (the matcher's first
+    // argument) is declared before the variable under test (the `expect(...)`
+    // argument). Only applies when both are plain identifiers that resolve to
+    // declared variables; anything else (inline literals, calls, undeclared
+    // names) has no declaration order to compare and is left alone.
+    const checkDeclarationOrder = (
+      matcherArg: Node,
+      expectArg: Node,
+      matcher: string,
+    ): void => {
+      if (matcherArg.type !== "Identifier" || expectArg.type !== "Identifier") {
+        return;
+      }
+      const expectedName = (matcherArg as Identifier).name;
+      const actualName = (expectArg as Identifier).name;
+      if (expectedName === actualName) {
+        return;
+      }
+      const scope = context.sourceCode.getScope(matcherArg);
+      const expectedVar = findVariable(scope, expectedName);
+      const actualVar = findVariable(scope, actualName);
+      if (expectedVar === null || actualVar === null) {
+        return;
+      }
+      const expectedStart = declarationStart(expectedVar);
+      const actualStart = declarationStart(actualVar);
+      if (expectedStart === null || actualStart === null) {
+        return;
+      }
+      if (expectedStart > actualStart) {
+        context.report({ message: orderMessage(matcher), node: matcherArg });
+      }
+    };
 
     const checkCall = (node: CallExpression): void => {
       const name = matcherName(node);
@@ -206,9 +265,10 @@ const rule = {
         return;
       }
       // The callee is a MemberExpression here (matcherName returned non-null),
-      // so its `object` is the receiver chain to test for the `expect` anchor.
+      // so its `object` is the receiver chain to search for the `expect` anchor.
       const receiver = (node.callee as MemberExpression).object;
-      if (!chainRootsAtExpect(receiver)) {
+      const expectCall = findExpectCall(receiver);
+      if (expectCall === null) {
         return;
       }
       // Inspect every argument: single-value matchers (`toEqual`) have one, but
@@ -221,11 +281,19 @@ const rule = {
         if (!isObject && !isArray) {
           continue;
         }
-        if (allowEmptyLiteral && isEmptyLiteral(literal)) {
-          continue;
-        }
         const message = isObject ? objectMessage(name) : arrayMessage(name);
         context.report({ message, node: arg });
+      }
+      // The expected value is the matcher's first argument; the value under test
+      // is the `expect(...)` call's first argument.
+      const matcherArg = node.arguments[0];
+      const expectArg = expectCall.arguments[0];
+      if (
+        requireExpectedBeforeActual &&
+        matcherArg !== undefined &&
+        expectArg !== undefined
+      ) {
+        checkDeclarationOrder(matcherArg, expectArg, name);
       }
     };
 

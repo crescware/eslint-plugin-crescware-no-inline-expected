@@ -19,5 +19,5 @@
     "eslint/curly": "error",
     "crescware-no-inline-expected/no-inline-expected": "error"
   },
-  "ignorePatterns": ["fixtures/**"]
+  "ignorePatterns": ["fixtures/cases/**", "fixtures/order-cases/**"]
 }
