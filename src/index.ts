@@ -1,6 +1,10 @@
 // Minimal structural types for the ESTree / TS-ESTree nodes this rule reads.
 // oxlint hands the JS plugin ESTree-compatible nodes; only the fields actually
-// inspected here are modeled and the rest are left opaque.
+// inspected here are modeled and the rest are left opaque. Every node also
+// carries a `parent` link and a `range`, used to walk up to the enclosing
+// `test(...)` callback and to compare textual positions.
+type Range = [number, number];
+
 type Node = { type: string };
 
 type Identifier = { type: "Identifier"; name: string };
@@ -27,25 +31,27 @@ type CallExpression = {
   arguments: Node[];
 };
 
+// A function whose body, when it is a block, holds the statements a `test(...)`
+// callback runs.
+type FunctionNode = { type: string; body: Node };
+
+type BlockStatement = { type: "BlockStatement"; body: Node[] };
+
 type ReportDescriptor = { message: string; node: unknown };
 
 // Minimal view of oxlint's scope analysis, reached through `context.sourceCode`.
-// A name resolves to a `ScopeVariable`, whose first definition node carries the
-// `range` start offset -- the textual position of the declaration, which is all
-// the declaration-order check needs.
-type Ranged = { range: [number, number] };
+// `getDeclaredVariables` maps a declaration node to the variables it introduces;
+// each variable's `references` carry the textual position of every use, which is
+// what the "expected first" check compares against statement spans.
+type Reference = { identifier: { range: Range } };
 
-type Definition = { node: Ranged };
+type ScopeVariable = { name: string; references: Reference[] };
 
-type ScopeVariable = { defs: Definition[] };
-
-type Scope = { set: Map<string, ScopeVariable>; upper: Scope | null };
-
-type SourceCode = { getScope: (node: Node) => Scope };
+type SourceCode = { getDeclaredVariables: (node: Node) => ScopeVariable[] };
 
 type RuleOptions = {
   matchers?: string[];
-  requireExpectedBeforeActual?: boolean;
+  requireExpectedFirstInTest?: boolean;
 };
 
 type RuleContext = {
@@ -163,31 +169,79 @@ const arrayMessage = (matcher: string): string => {
   return `Inline array literal passed to '${matcher}'. Declare the expected value as a variable first: write 'const expected = [ ... ]; expect(actual).${matcher}(expected);' instead of passing the literal inline.`;
 };
 
-// Resolve an in-scope variable by name, walking outward through enclosing
-// scopes. Returns null for an unresolved name (e.g. an undeclared global), in
-// which case the declaration-order check is skipped.
-const findVariable = (scope: Scope, name: string): ScopeVariable | null => {
-  let current: Scope | null = scope;
-  while (current !== null) {
-    const variable = current.set.get(name);
-    if (variable !== undefined) {
-      return variable;
+// The node's parent link, present on every oxlint AST node (null only at the
+// Program root). Read through a cast because the opaque `Node` shape omits it.
+const parentOf = (node: Node): Node | null => {
+  return (node as { parent?: Node | null }).parent ?? null;
+};
+
+// The node's `[start, end)` source offsets, used to test whether one node sits
+// textually inside another.
+const rangeOf = (node: Node): Range => {
+  return (node as unknown as { range: Range }).range;
+};
+
+// The identifier at the root of a call's callee, seen through member and call
+// layers: `test(...)` -> "test", `it.only(...)` -> "it", and
+// `test.each(table)(...)` -> "test". Returns null when the callee bottoms out in
+// something other than an identifier.
+const rootCalleeName = (call: CallExpression): string | null => {
+  let current: Node = call.callee;
+  while (true) {
+    if (current.type === "Identifier") {
+      return (current as Identifier).name;
     }
-    current = current.upper;
+    if (current.type === "MemberExpression") {
+      current = (current as MemberExpression).object;
+      continue;
+    }
+    if (current.type === "CallExpression") {
+      current = (current as CallExpression).callee;
+      continue;
+    }
+    return null;
+  }
+};
+
+// The callee identifiers whose callback bodies this rule treats as a test.
+const TEST_CALLEES = new Set<string>(["test", "it"]);
+
+// The block body of the nearest enclosing `test(...)` / `it(...)` callback, found
+// by walking parents up from `node`. Modifier and table forms (`it.only`,
+// `test.each(table)(...)`) are recognized via the callee's root identifier, and
+// an intervening non-test function (a helper closure) is skipped over. Returns
+// null when there is no such callback, or its body is an expression with no
+// statements to order.
+const enclosingTestCallbackBody = (node: Node): BlockStatement | null => {
+  let current: Node | null = parentOf(node);
+  while (current !== null) {
+    if (
+      current.type === "ArrowFunctionExpression" ||
+      current.type === "FunctionExpression"
+    ) {
+      const parent = parentOf(current);
+      if (parent !== null && parent.type === "CallExpression") {
+        const call = parent as CallExpression;
+        const root = rootCalleeName(call);
+        if (
+          root !== null &&
+          TEST_CALLEES.has(root) &&
+          call.arguments.includes(current)
+        ) {
+          const body = (current as FunctionNode).body;
+          return body.type === "BlockStatement"
+            ? (body as BlockStatement)
+            : null;
+        }
+      }
+    }
+    current = parentOf(current);
   }
   return null;
 };
 
-// The start offset of a variable's first declaration, or null when it has no
-// definition node (an implicit / ambient binding). Used to compare the textual
-// order of two declarations.
-const declarationStart = (variable: ScopeVariable): number | null => {
-  const def = variable.defs[0];
-  return def === undefined ? null : def.node.range[0];
-};
-
 const orderMessage = (matcher: string): string => {
-  return `The variable passed as the expected value to '${matcher}' is declared after the variable passed to 'expect(...)'. Declare the expected variable first, so the expected value is introduced before the value under test.`;
+  return `The expected value passed to '${matcher}' is not declared at the top of the test. Declare the expected variable first in the 'test' / 'it' callback, before any statement that is not used to build it.`;
 };
 
 const rule = {
@@ -195,7 +249,7 @@ const rule = {
     type: "suggestion",
     docs: {
       description:
-        "Disallow passing an inline object or array literal as the expected value to an `expect(...)` matcher; declare it in a `const` variable first. By default the deep-equality matchers `toEqual` and `toStrictEqual` are checked; override the set with the `matchers` option. A literal wrapped in `as` / `satisfies` is still reported because it is still inline, and an empty `{}` / `[]` is reported too. The rule also requires, by default, that the variable passed as the expected value is declared before the variable passed to `expect(...)`; set `requireExpectedBeforeActual` to `false` to turn that off.",
+        "Disallow passing an inline object or array literal as the expected value to an `expect(...)` matcher; declare it in a `const` variable first. By default the deep-equality matchers `toEqual` and `toStrictEqual` are checked; override the set with the `matchers` option. A literal wrapped in `as` / `satisfies` is still reported because it is still inline, and an empty `{}` / `[]` is reported too. The rule also requires, by default, that inside a `test` / `it` callback the expected variable is declared first -- before any statement that is not used to build it; set `requireExpectedFirstInTest` to `false` to turn that off.",
     },
     schema: [
       {
@@ -207,7 +261,7 @@ const rule = {
             minItems: 1,
             uniqueItems: true,
           },
-          requireExpectedBeforeActual: { type: "boolean" },
+          requireExpectedFirstInTest: { type: "boolean" },
         },
         additionalProperties: false,
       },
@@ -220,42 +274,126 @@ const rule = {
         ? configuredMatchers
         : DEFAULT_MATCHERS,
     );
-    // Default true: the declaration-order check is on; set
-    // `requireExpectedBeforeActual: false` to disable it.
-    const requireExpectedBeforeActual =
-      context.options[0]?.requireExpectedBeforeActual !== false;
+    // Default true: the "expected first in test" check is on; set
+    // `requireExpectedFirstInTest: false` to disable it.
+    const requireExpectedFirstInTest =
+      context.options[0]?.requireExpectedFirstInTest !== false;
 
-    // Enforce that the variable used as the expected value (the matcher's first
-    // argument) is declared before the variable under test (the `expect(...)`
-    // argument). Only applies when both are plain identifiers that resolve to
-    // declared variables; anything else (inline literals, calls, undeclared
-    // names) has no declaration order to compare and is left alone.
-    const checkDeclarationOrder = (
+    // Enforce that, inside a `test` / `it` callback, the variable used as the
+    // expected value is declared at the top of the callback. Only declarations
+    // of variables the expected value (transitively) uses may precede it, and
+    // even those may not be part of the value passed to `expect(...)` -- so an
+    // `expected` aliased from the value under test (`const expected = actual;`)
+    // is still reported. Anything else above the declaration (the value under
+    // test, unrelated setup, a bare statement) is a violation. Only plain
+    // identifiers declared directly in the callback are considered; an expected
+    // value that is a literal, a call, or declared elsewhere is left alone.
+    const checkExpectedFirstInTest = (
       matcherArg: Node,
-      expectArg: Node,
+      expectArg: Node | undefined,
+      anchor: Node,
       matcher: string,
     ): void => {
-      if (matcherArg.type !== "Identifier" || expectArg.type !== "Identifier") {
+      if (matcherArg.type !== "Identifier") {
         return;
       }
       const expectedName = (matcherArg as Identifier).name;
-      const actualName = (expectArg as Identifier).name;
-      if (expectedName === actualName) {
+
+      const body = enclosingTestCallbackBody(anchor);
+      if (body === null) {
         return;
       }
-      const scope = context.sourceCode.getScope(matcherArg);
-      const expectedVar = findVariable(scope, expectedName);
-      const actualVar = findVariable(scope, actualName);
-      if (expectedVar === null || actualVar === null) {
+      const statements = body.body;
+
+      // Variables introduced by each statement (empty for non-declarations).
+      const declaredVars = statements.map((statement): ScopeVariable[] =>
+        statement.type === "VariableDeclaration"
+          ? context.sourceCode.getDeclaredVariables(statement)
+          : [],
+      );
+
+      // The statement that declares the expected variable as a direct child of
+      // the callback body. When the expected value is declared elsewhere (an
+      // outer scope, a parameter, a nested block, an import) there is no
+      // callback-top position to enforce, so the check is skipped.
+      const declIndex = declaredVars.findIndex((vars) =>
+        vars.some((variable) => variable.name === expectedName),
+      );
+      if (declIndex === -1) {
         return;
       }
-      const expectedStart = declarationStart(expectedVar);
-      const actualStart = declarationStart(actualVar);
-      if (expectedStart === null || actualStart === null) {
-        return;
+
+      // Map each callback-local variable to the statement that declares it.
+      const declaringStatement = new Map<ScopeVariable, number>();
+      for (const [i, vars] of declaredVars.entries()) {
+        for (const variable of vars) {
+          declaringStatement.set(variable, i);
+        }
       }
-      if (expectedStart > actualStart) {
-        context.report({ message: orderMessage(matcher), node: matcherArg });
+
+      // True when `variable` is referenced anywhere inside `[start, end)`.
+      const referencedWithin = (
+        variable: ScopeVariable,
+        start: number,
+        end: number,
+      ): boolean => {
+        return variable.references.some((reference) => {
+          const at = reference.identifier.range[0];
+          return at >= start && at < end;
+        });
+      };
+
+      // Variables that appear inside the `expect(...)` argument: the value under
+      // test. These may never sit above the expected declaration, even when the
+      // expected value happens to reference them.
+      const underTest = new Set<ScopeVariable>();
+      if (expectArg !== undefined) {
+        const [start, end] = rangeOf(expectArg);
+        for (const variable of declaringStatement.keys()) {
+          if (referencedWithin(variable, start, end)) {
+            underTest.add(variable);
+          }
+        }
+      }
+
+      // Statements the expected declaration transitively depends on: starting
+      // from the declaration, pull in any statement whose variable is referenced
+      // within a statement already known to be needed.
+      const needed = new Set<number>([declIndex]);
+      const pending = [declIndex];
+      while (pending.length > 0) {
+        const index = pending.pop();
+        if (index === undefined) {
+          break;
+        }
+        const statement = statements[index];
+        if (statement === undefined) {
+          continue;
+        }
+        const [start, end] = rangeOf(statement);
+        for (const [variable, owner] of declaringStatement) {
+          if (owner === index || needed.has(owner)) {
+            continue;
+          }
+          if (referencedWithin(variable, start, end)) {
+            needed.add(owner);
+            pending.push(owner);
+          }
+        }
+      }
+
+      // Every statement above the declaration must be a dependency declaration
+      // that introduces no value-under-test variable.
+      for (let k = 0; k < declIndex; k++) {
+        const vars = declaredVars[k] ?? [];
+        const isDependency = needed.has(k);
+        const introducesUnderTest = vars.some((variable) =>
+          underTest.has(variable),
+        );
+        if (!isDependency || introducesUnderTest) {
+          context.report({ message: orderMessage(matcher), node: matcherArg });
+          return;
+        }
       }
     };
 
@@ -288,12 +426,8 @@ const rule = {
       // is the `expect(...)` call's first argument.
       const matcherArg = node.arguments[0];
       const expectArg = expectCall.arguments[0];
-      if (
-        requireExpectedBeforeActual &&
-        matcherArg !== undefined &&
-        expectArg !== undefined
-      ) {
-        checkDeclarationOrder(matcherArg, expectArg, name);
+      if (requireExpectedFirstInTest && matcherArg !== undefined) {
+        checkExpectedFirstInTest(matcherArg, expectArg, node, name);
       }
     };
 

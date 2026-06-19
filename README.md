@@ -25,18 +25,38 @@ expect(actual).toEqual(expected);
 expect(actual).toEqual(buildExpected());
 ```
 
-By default the rule also enforces declaration order: the expected variable must be declared **before** the variable passed to `expect(...)`.
+By default the rule also enforces that, inside a `test` / `it` callback, the expected variable is declared **first** — at the top of the callback. Only declarations of variables that the expected value uses may precede it, and even those may not be part of the value passed to `expect(...)`.
 
 ```ts
-// NG: the expected variable is declared after the value under test
-const something = {};
-const expected = {};
-expect(something).toEqual(expected);
+// NG: an unrelated variable is declared above expected
+test("...", () => {
+  const something = {};
+  const expected = {};
+  expect(something).toEqual(expected);
+});
 
-// OK: the expected variable is declared first
-const expected = {};
-const something = {};
-expect(something).toEqual(expected);
+// NG: expected is aliased from the value under test
+test("...", () => {
+  const actual = { a: 1 };
+  const expected = actual;
+  expect(actual).toStrictEqual(expected);
+});
+
+// OK: expected is declared first
+test("...", () => {
+  const expected = {};
+  const actual = {};
+  expect(actual).toEqual(expected);
+});
+
+// OK: a variable used to build expected may precede it, as long as it is not
+// the value under test
+test("...", () => {
+  const id = makeId();
+  const expected = { id, name: "alice" };
+  const actual = makeUser(id);
+  expect(actual).toEqual(expected);
+});
 ```
 
 ### Scope
@@ -52,7 +72,7 @@ Notes:
 - Object and array literals are treated the same, including empty `{}` / `[]`.
 - Every argument is inspected, so multi-argument matchers (e.g. a configured `toHaveBeenCalledWith`) report each inline literal.
 - The rule applies to JavaScript (`.js` / `.mjs` / `.cjs` / `.jsx`) as well as TypeScript: it targets a runtime assertion call, not any TypeScript-only syntax.
-- The declaration-order check (on by default) only applies when both the expected value and the value under test are plain identifiers that resolve to declared variables. Inline literals, calls, and undeclared names have no declaration to order and are left alone.
+- The expected-first check (on by default) only applies inside a `test` / `it` callback, and only when the expected value is a plain identifier declared directly in that callback. An expected value that is an inline literal, a call, or declared elsewhere (an outer scope, a parameter, an import) has no callback-top position to enforce and is left alone. Modifier and table forms (`it.only`, `test.each(table)(...)`) are recognized.
 - The rule does not autofix; it reports only.
 
 ### Options
@@ -64,17 +84,17 @@ Notes:
     // The matcher names to check. Replaces the default set, not extends it.
     "matchers": ["toEqual", "toStrictEqual"],
 
-    // true (default): the expected variable must be declared before the
-    // variable passed to `expect(...)`. Set to false to disable this check.
-    "requireExpectedBeforeActual": true
+    // true (default): inside a `test` / `it` callback the expected variable
+    // must be declared first. Set to false to disable this check.
+    "requireExpectedFirstInTest": true
   }
 ]
 ```
 
-| Option                        | Type       | Default                        | Effect                                                                                                                                                                                                      |
-| ----------------------------- | ---------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `matchers`                    | `string[]` | `["toEqual", "toStrictEqual"]` | The matcher names whose inline-literal arguments are reported. Setting this **replaces** the default set. Add names such as `toMatchObject`, `toContainEqual`, or `toHaveBeenCalledWith` to widen coverage. |
-| `requireExpectedBeforeActual` | `boolean`  | `true`                         | When `true`, additionally requires the variable passed as the expected value to be declared before the variable passed to `expect(...)`. Set to `false` to disable this check.                              |
+| Option                       | Type       | Default                        | Effect                                                                                                                                                                                                                                                       |
+| ---------------------------- | ---------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `matchers`                   | `string[]` | `["toEqual", "toStrictEqual"]` | The matcher names whose inline-literal arguments are reported. Setting this **replaces** the default set. Add names such as `toMatchObject`, `toContainEqual`, or `toHaveBeenCalledWith` to widen coverage.                                                  |
+| `requireExpectedFirstInTest` | `boolean`  | `true`                         | When `true`, additionally requires the expected variable to be declared first inside its `test` / `it` callback. Only declarations of variables the expected value uses may precede it (and not the value under test). Set to `false` to disable this check. |
 
 ## Usage
 

@@ -12,7 +12,7 @@ const fixturesDir = resolve(repoRoot, "fixtures");
 // this rule to this test harness. The harness therefore obeys the rule for
 // real: every assertion declares its expected value in a named `const` first and
 // passes that variable to `toEqual`, never an inline literal. The inline-literal
-// cases and the declaration-order cases are kept apart so the per-config
+// cases and the expected-first ordering cases are kept apart so the per-config
 // diagnostic counts stay easy to account for.
 const casesDir = resolve(fixturesDir, "cases");
 const orderCasesDir = resolve(fixturesDir, "order-cases");
@@ -57,7 +57,7 @@ const arrayMessage = (matcher: string): string => {
 };
 
 const orderMessage = (matcher: string): string => {
-  return `The variable passed as the expected value to '${matcher}' is declared after the variable passed to 'expect(...)'. Declare the expected variable first, so the expected value is introduced before the value under test.`;
+  return `The expected value passed to '${matcher}' is not declared at the top of the test. Declare the expected variable first in the 'test' / 'it' callback, before any statement that is not used to build it.`;
 };
 
 let defaultDiagnostics: Diagnostic[] = [];
@@ -72,7 +72,7 @@ beforeAll(() => {
   }
   defaultDiagnostics = runFixtures(defaultConfig, casesDir);
   matchersDiagnostics = runFixtures(matchersConfig, casesDir);
-  // The declaration-order check is on by default, so the default config drives
+  // The expected-first check is on by default, so the default config drives
   // the order cases; the order-off config proves it can be disabled.
   orderDiagnostics = runFixtures(defaultConfig, orderCasesDir);
   orderOffDiagnostics = runFixtures(orderOffConfig, orderCasesDir);
@@ -167,13 +167,13 @@ describe("matchers: ['toMatchObject', 'toContainEqual']", () => {
   });
 });
 
-describe("requireExpectedBeforeActual (on by default)", () => {
-  test("an expected variable declared after the actual is reported", () => {
+describe("requireExpectedFirstInTest (on by default)", () => {
+  test("an expected not declared first in the test is reported", () => {
     const expected = [orderMessage("toEqual"), orderMessage("toStrictEqual")];
     expect(messagesFor(orderDiagnostics, "ng-order.ts")).toEqual(expected);
   });
 
-  test("an expected variable declared first is allowed", () => {
+  test("an expected declared first in the test is allowed", () => {
     const expected: string[] = [];
     expect(messagesFor(orderDiagnostics, "ok-order.ts")).toEqual(expected);
   });
@@ -183,8 +183,8 @@ describe("requireExpectedBeforeActual (on by default)", () => {
   });
 });
 
-describe("requireExpectedBeforeActual: false", () => {
-  test("the declaration-order check stops reporting", () => {
+describe("requireExpectedFirstInTest: false", () => {
+  test("the expected-first check stops reporting", () => {
     const expected: string[] = [];
     expect(messagesFor(orderOffDiagnostics, "ng-order.ts")).toEqual(expected);
   });
