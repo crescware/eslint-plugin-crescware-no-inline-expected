@@ -1,0 +1,19 @@
+{
+  "plugins": [],
+  "categories": {
+    "correctness": "off",
+    "suspicious": "off",
+    "pedantic": "off",
+    "perf": "off",
+    "style": "off",
+    "restriction": "off",
+    "nursery": "off"
+  },
+  "jsPlugins": ["../src/index.ts"],
+  "rules": {
+    "crescware-no-inline-expected/no-inline-expected": [
+      "error",
+      { "matchers": ["toMatchObject", "toContainEqual"] }
+    ]
+  }
+}
