@@ -30,3 +30,26 @@ test("a non-identifier expected has no declaration to order", () => {
   const actual = { a: 1 };
   expect(actual).toEqual(makeExpected());
 });
+
+test("a local type may precede expected", () => {
+  type Expected = { a: number };
+  const expected: Expected = { a: 1 };
+  const actual = { a: 1 };
+  expect(actual).toEqual(expected);
+});
+
+test("a local interface may precede expected", () => {
+  interface Shape {
+    a: number;
+  }
+  const expected: Shape = { a: 1 };
+  const actual = { a: 1 };
+  expect(actual).toEqual(expected);
+});
+
+test("an unrelated local type may precede expected", () => {
+  type Unrelated = { z: number };
+  const expected = { a: 1 };
+  const actual = { a: 1 };
+  expect(actual).toEqual(expected);
+});

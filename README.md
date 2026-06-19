@@ -73,6 +73,7 @@ Notes:
 - Every argument is inspected, so multi-argument matchers (e.g. a configured `toHaveBeenCalledWith`) report each inline literal.
 - The rule applies to JavaScript (`.js` / `.mjs` / `.cjs` / `.jsx`) as well as TypeScript: it targets a runtime assertion call, not any TypeScript-only syntax.
 - The expected-first check (on by default) only applies inside a `test` / `it` callback, and only when the expected value is a plain identifier declared directly in that callback. An expected value that is an inline literal, a call, or declared elsewhere (an outer scope, a parameter, an import) has no callback-top position to enforce and is left alone. Modifier and table forms (`it.only`, `test.each(table)(...)`) are recognized.
+- Type-only declarations (`type` / `interface`) introduce no runtime value, so they are always allowed above the expected declaration, whether or not the expected value uses them.
 - The rule does not autofix; it reports only.
 
 ### Options
