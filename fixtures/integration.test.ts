@@ -9,10 +9,11 @@ const oxlintBin = resolve(repoRoot, "node_modules/.bin/oxlint");
 const fixturesDir = resolve(repoRoot, "fixtures");
 // The deliberately-violating case files live in subdirectories of their own, so
 // the project's own lint can ignore just those directories while still applying
-// this rule to this test harness (which therefore obeys the rule itself: every
-// assertion goes through `expectMessages`, never an inline `expect(...).toEqual`
-// on a literal). The inline-literal cases and the declaration-order cases are
-// kept apart so the per-config diagnostic counts stay easy to account for.
+// this rule to this test harness. The harness therefore obeys the rule for
+// real: every assertion declares its expected value in a named `const` first and
+// passes that variable to `toEqual`, never an inline literal. The inline-literal
+// cases and the declaration-order cases are kept apart so the per-config
+// diagnostic counts stay easy to account for.
 const casesDir = resolve(fixturesDir, "cases");
 const orderCasesDir = resolve(fixturesDir, "order-cases");
 const defaultConfig = resolve(fixturesDir, "oxlintrc.default.json");
@@ -44,20 +45,6 @@ const messagesFor = (diagnostics: Diagnostic[], filename: string): string[] => {
   return diagnostics
     .filter((v) => v.filename.endsWith(`/${filename}`))
     .map((v) => v.message);
-};
-
-// Assert the messages reported for a fixture file. Keeping the single
-// `toEqual` here -- with the expected value arriving as a parameter and the
-// actual value declared first -- lets every call site pass its expected list
-// without writing an inline literal into `expect(...).toEqual(...)`, so this
-// file obeys the very rule it tests.
-const expectMessages = (
-  diagnostics: Diagnostic[],
-  filename: string,
-  expected: string[],
-): void => {
-  const actual = messagesFor(diagnostics, filename);
-  expect(actual).toEqual(expected);
 };
 
 // Must match the message generators in src/index.ts exactly.
@@ -96,12 +83,12 @@ const okFiles = ["ok-variable.ts", "ok-out-of-scope.ts"] satisfies string[];
 describe("default options", () => {
   test("inline object literals are reported", () => {
     const expected = [objectMessage("toEqual"), objectMessage("toStrictEqual")];
-    expectMessages(defaultDiagnostics, "ng-object.ts", expected);
+    expect(messagesFor(defaultDiagnostics, "ng-object.ts")).toEqual(expected);
   });
 
   test("inline array literals are reported", () => {
     const expected = [arrayMessage("toEqual"), arrayMessage("toStrictEqual")];
-    expectMessages(defaultDiagnostics, "ng-array.ts", expected);
+    expect(messagesFor(defaultDiagnostics, "ng-array.ts")).toEqual(expected);
   });
 
   test("literals behind modifier chains are reported", () => {
@@ -111,7 +98,9 @@ describe("default options", () => {
       objectMessage("toEqual"),
       objectMessage("toEqual"),
     ];
-    expectMessages(defaultDiagnostics, "ng-modifiers.ts", expected);
+    expect(messagesFor(defaultDiagnostics, "ng-modifiers.ts")).toEqual(
+      expected,
+    );
   });
 
   test("literals wrapped in `as` / `satisfies` are reported", () => {
@@ -121,26 +110,28 @@ describe("default options", () => {
       arrayMessage("toEqual"),
       objectMessage("toEqual"),
     ];
-    expectMessages(defaultDiagnostics, "ng-wrapped.ts", expected);
+    expect(messagesFor(defaultDiagnostics, "ng-wrapped.ts")).toEqual(expected);
   });
 
   test("only the configured matcher fires for custom-matcher fixtures", () => {
     const expected = [objectMessage("toEqual")];
-    expectMessages(defaultDiagnostics, "ng-custom-matchers.ts", expected);
+    const actual = messagesFor(defaultDiagnostics, "ng-custom-matchers.ts");
+    expect(actual).toEqual(expected);
   });
 
   test("JavaScript files are in scope", () => {
     const expected = [objectMessage("toEqual")];
-    expectMessages(defaultDiagnostics, "ng-js.js", expected);
+    expect(messagesFor(defaultDiagnostics, "ng-js.js")).toEqual(expected);
   });
 
   test("empty literals are reported", () => {
     const expected = [objectMessage("toEqual"), arrayMessage("toEqual")];
-    expectMessages(defaultDiagnostics, "ng-empty.ts", expected);
+    expect(messagesFor(defaultDiagnostics, "ng-empty.ts")).toEqual(expected);
   });
 
   test.each(okFiles)("%s has no diagnostics", (file) => {
-    expectMessages(defaultDiagnostics, file, []);
+    const expected: string[] = [];
+    expect(messagesFor(defaultDiagnostics, file)).toEqual(expected);
   });
 
   test("total diagnostics are fully accounted for", () => {
@@ -154,17 +145,20 @@ describe("matchers: ['toMatchObject', 'toContainEqual']", () => {
       objectMessage("toMatchObject"),
       objectMessage("toContainEqual"),
     ];
-    expectMessages(matchersDiagnostics, "ng-custom-matchers.ts", expected);
+    const actual = messagesFor(matchersDiagnostics, "ng-custom-matchers.ts");
+    expect(actual).toEqual(expected);
   });
 
   test("default matchers no longer fire", () => {
-    expectMessages(matchersDiagnostics, "ng-object.ts", []);
-    expectMessages(matchersDiagnostics, "ng-array.ts", []);
-    expectMessages(matchersDiagnostics, "ng-empty.ts", []);
+    const expected: string[] = [];
+    expect(messagesFor(matchersDiagnostics, "ng-object.ts")).toEqual(expected);
+    expect(messagesFor(matchersDiagnostics, "ng-array.ts")).toEqual(expected);
+    expect(messagesFor(matchersDiagnostics, "ng-empty.ts")).toEqual(expected);
   });
 
   test.each(okFiles)("%s has no diagnostics", (file) => {
-    expectMessages(matchersDiagnostics, file, []);
+    const expected: string[] = [];
+    expect(messagesFor(matchersDiagnostics, file)).toEqual(expected);
   });
 
   test("total diagnostics are fully accounted for", () => {
@@ -175,11 +169,12 @@ describe("matchers: ['toMatchObject', 'toContainEqual']", () => {
 describe("requireExpectedBeforeActual (on by default)", () => {
   test("an expected variable declared after the actual is reported", () => {
     const expected = [orderMessage("toEqual"), orderMessage("toStrictEqual")];
-    expectMessages(orderDiagnostics, "ng-order.ts", expected);
+    expect(messagesFor(orderDiagnostics, "ng-order.ts")).toEqual(expected);
   });
 
   test("an expected variable declared first is allowed", () => {
-    expectMessages(orderDiagnostics, "ok-order.ts", []);
+    const expected: string[] = [];
+    expect(messagesFor(orderDiagnostics, "ok-order.ts")).toEqual(expected);
   });
 
   test("total diagnostics are fully accounted for", () => {
@@ -189,7 +184,8 @@ describe("requireExpectedBeforeActual (on by default)", () => {
 
 describe("requireExpectedBeforeActual: false", () => {
   test("the declaration-order check is disabled", () => {
-    expectMessages(orderOffDiagnostics, "ng-order.ts", []);
+    const expected: string[] = [];
+    expect(messagesFor(orderOffDiagnostics, "ng-order.ts")).toEqual(expected);
     expect(orderOffDiagnostics.length).toBe(0);
   });
 });
