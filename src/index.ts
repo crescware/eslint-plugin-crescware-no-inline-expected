@@ -206,6 +206,14 @@ const rootCalleeName = (call: CallExpression): string | null => {
 // The callee identifiers whose callback bodies this rule treats as a test.
 const TEST_CALLEES = new Set<string>(["test", "it"]);
 
+// Type-only declarations introduce no runtime value, so they are neither the
+// value under test nor arrange code; they are always allowed above the expected
+// declaration regardless of whether the expected value uses them.
+const TYPE_ONLY_STATEMENTS = new Set<string>([
+  "TSTypeAliasDeclaration",
+  "TSInterfaceDeclaration",
+]);
+
 // The block body of the nearest enclosing `test(...)` / `it(...)` callback, found
 // by walking parents up from `node`. Modifier and table forms (`it.only`,
 // `test.each(table)(...)`) are recognized via the callee's root identifier, and
@@ -383,8 +391,16 @@ const rule = {
       }
 
       // Every statement above the declaration must be a dependency declaration
-      // that introduces no value-under-test variable.
+      // that introduces no value-under-test variable. Type-only declarations
+      // (`type` / `interface`) are skipped unconditionally.
       for (let k = 0; k < declIndex; k++) {
+        const statement = statements[k];
+        if (
+          statement !== undefined &&
+          TYPE_ONLY_STATEMENTS.has(statement.type)
+        ) {
+          continue;
+        }
         const vars = declaredVars[k] ?? [];
         const isDependency = needed.has(k);
         const introducesUnderTest = vars.some((variable) =>
